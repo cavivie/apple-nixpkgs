@@ -6,14 +6,12 @@
   outputs =
     { self, nixpkgs }:
     let
-      xtoolSystems = [
+      supportedSystems = [
         "aarch64-darwin"
         "aarch64-linux"
         "x86_64-linux"
       ];
-      appleSystems = [ "aarch64-darwin" ];
-      forXtoolSystems = nixpkgs.lib.genAttrs xtoolSystems;
-      forAppleSystems = nixpkgs.lib.genAttrs appleSystems;
+      forSupportedSystems = nixpkgs.lib.genAttrs supportedSystems;
       releases = import ./nix/releases.nix;
       latestVersion = "26.6";
 
@@ -26,86 +24,97 @@
           };
           release = releases.${latestVersion};
           xtool = pkgs.callPackage ./nix/xtool.nix { inherit release; };
-          xcodePlatform = pkgs.callPackage ./nix/xcode-platform.nix { inherit release; };
+          isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+          swiftToolchain =
+            if isDarwin then null else pkgs.callPackage ./nix/swift-toolchain.nix { inherit release; };
+          applePlatform =
+            if isDarwin then
+              pkgs.callPackage ./nix/xcode-platform.nix { inherit release; }
+            else
+              pkgs.callPackage ./nix/darwin-platform.nix {
+                inherit release swiftToolchain xtool;
+              };
           sdkPackages = {
             inherit xtool;
-            xcode-platform = xcodePlatform;
+            apple-platform = applePlatform;
+          }
+          // nixpkgs.lib.optionalAttrs (!isDarwin) {
+            swift-toolchain = swiftToolchain;
           };
           mkSdk = pkgs.callPackage ./nix/mk-sdk.nix { inherit release xtool; };
           sdk = componentsFn: mkSdk (componentsFn sdkPackages);
-          fullSdk = sdk (components: builtins.attrValues components);
+          toolchain = sdk (
+            components:
+            [
+              components.xtool
+              components.apple-platform
+            ]
+            ++ nixpkgs.lib.optional (!isDarwin) components.swift-toolchain
+          );
           versionSlug = builtins.replaceStrings [ "." ] [ "-" ] release.xcode.version;
         in
         {
           inherit
+            applePlatform
+            isDarwin
             pkgs
             release
-            xtool
-            xcodePlatform
             sdkPackages
             sdk
-            fullSdk
+            swiftToolchain
+            toolchain
             versionSlug
+            xtool
             ;
         };
-
-      xtoolFor =
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-          release = releases.${latestVersion};
-        in
-        pkgs.callPackage ./nix/xtool.nix { inherit release; };
     in
     {
       lib = {
         inherit releases latestVersion;
-        supportedAppleSystems = appleSystems;
-        supportedXtoolSystems = xtoolSystems;
+        inherit supportedSystems;
+        supportedAppleSystems = supportedSystems;
+        supportedXtoolSystems = supportedSystems;
       };
 
-      sdk = forAppleSystems (system: (packageSetFor system).sdk);
+      sdk = forSupportedSystems (system: (packageSetFor system).sdk);
 
       overlays.default =
         final: _prev:
-        {
-          appleXtool = xtoolFor final.system;
-        }
-        // nixpkgs.lib.optionalAttrs (builtins.elem final.system appleSystems) {
+        nixpkgs.lib.optionalAttrs (builtins.elem final.system supportedSystems) {
+          appleXtool = (packageSetFor final.system).xtool;
           appleSdkPackages = (packageSetFor final.system).sdkPackages;
           appleSdk = (packageSetFor final.system).sdk;
+          appleToolchain = (packageSetFor final.system).toolchain;
         };
 
-      packages = forXtoolSystems (
+      packages = forSupportedSystems (
         system:
         let
-          xtool = xtoolFor system;
+          packageSet = packageSetFor system;
         in
         {
-          inherit xtool;
-          default = xtool;
+          inherit (packageSet) xtool toolchain;
+          sdk = packageSet.toolchain;
+          "sdk-${packageSet.versionSlug}" = packageSet.toolchain;
+          default = packageSet.toolchain;
         }
-        // nixpkgs.lib.optionalAttrs (builtins.elem system appleSystems) (
-          let
-            packageSet = packageSetFor system;
-          in
-          {
-            sdk = packageSet.fullSdk;
-            "sdk-${packageSet.versionSlug}" = packageSet.fullSdk;
-            xcode-platform = packageSet.xcodePlatform;
-            "xcode-platform-${packageSet.versionSlug}" = packageSet.xcodePlatform;
-            default = packageSet.fullSdk;
-          }
-        )
+        // nixpkgs.lib.optionalAttrs packageSet.isDarwin {
+          xcode-platform = packageSet.applePlatform;
+          "xcode-platform-${packageSet.versionSlug}" = packageSet.applePlatform;
+        }
+        // nixpkgs.lib.optionalAttrs (!packageSet.isDarwin) {
+          darwin-platform = packageSet.applePlatform;
+          swift-toolchain = packageSet.swiftToolchain;
+        }
       );
 
-      apps = forAppleSystems (
+      apps = forSupportedSystems (
         system:
         let
           packageSet = packageSetFor system;
           doctor = {
             type = "app";
-            program = "${packageSet.xcodePlatform}/bin/apple-sdk-doctor";
+            program = "${packageSet.toolchain}/bin/apple-sdk-doctor";
             meta.description = "Validate the selected Xcode and Apple SDK BOM";
           };
         in
@@ -113,16 +122,36 @@
           inherit doctor;
           "doctor-${packageSet.versionSlug}" = doctor;
         }
+        // nixpkgs.lib.optionalAttrs (!packageSet.isDarwin) (
+          let
+            installer = packageSet.pkgs.callPackage ./nix/install-sdk.nix {
+              inherit (packageSet)
+                release
+                swiftToolchain
+                xtool
+                ;
+              darwinPlatform = packageSet.applePlatform;
+              system = system;
+            };
+          in
+          {
+            install-sdk = {
+              type = "app";
+              program = "${installer}/bin/apple-sdk-install";
+              meta.description = "Install a user-provided Darwin SDK for xtool on Linux";
+            };
+          }
+        )
       );
 
-      devShells = forAppleSystems (
+      devShells = forSupportedSystems (
         system:
         let
           packageSet = packageSetFor system;
         in
         {
           default = packageSet.pkgs.mkShellNoCC {
-            packages = [ packageSet.fullSdk ];
+            packages = [ packageSet.toolchain ];
             shellHook = ''
               apple-sdk-doctor
             '';
@@ -130,11 +159,11 @@
         }
       );
 
-      checks = forXtoolSystems (
+      checks = forSupportedSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
-          xtool = xtoolFor system;
+          packageSet = packageSetFor system;
+          inherit (packageSet) pkgs xtool;
         in
         {
           xtool = pkgs.runCommand "check-xtool" { } ''
@@ -145,21 +174,22 @@
             touch "$out"
           '';
         }
-        // nixpkgs.lib.optionalAttrs (builtins.elem system appleSystems) (
-          let
-            packageSet = packageSetFor system;
-          in
-          {
-            sdk-layout = packageSet.pkgs.runCommand "check-apple-sdk-layout" { } ''
-              test -x ${packageSet.fullSdk}/bin/xtool
-              test -x ${packageSet.fullSdk}/bin/apple-sdk-doctor
-              test -f ${packageSet.fullSdk}/nix-support/setup-hook
-              touch "$out"
-            '';
-          }
-        )
+        // {
+          sdk-layout = packageSet.pkgs.runCommand "check-apple-sdk-layout" { } ''
+            test -x ${packageSet.toolchain}/bin/xtool
+            test -x ${packageSet.toolchain}/bin/apple-sdk-doctor
+            ${nixpkgs.lib.optionalString packageSet.isDarwin ''
+              test -f ${packageSet.toolchain}/nix-support/setup-hook
+            ''}
+            ${nixpkgs.lib.optionalString (!packageSet.isDarwin) ''
+              test -x ${packageSet.toolchain}/bin/swift
+              test -f ${packageSet.toolchain}/nix-support/setup-hook
+            ''}
+            touch "$out"
+          '';
+        }
       );
 
-      formatter = forXtoolSystems (system: (import nixpkgs { inherit system; }).nixfmt-tree);
+      formatter = forSupportedSystems (system: (import nixpkgs { inherit system; }).nixfmt-tree);
     };
 }

@@ -66,6 +66,7 @@ let
 
   setupHook = writeText "apple-xcode-platform-setup-hook" ''
     if [ "$(uname -s)" = Darwin ]; then
+      unset APPLE_NIXPKGS_DARWIN_SDK APPLE_NIXPKGS_CLANG
       : "''${APPLE_NIXPKGS_XCODE_PATH:=/Applications/Xcode.app}"
       export APPLE_NIXPKGS_XCODE_PATH
       export DEVELOPER_DIR="$APPLE_NIXPKGS_XCODE_PATH/Contents/Developer"

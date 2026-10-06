@@ -2,6 +2,7 @@
   lib,
   runCommand,
   lndir,
+  stdenvNoCC,
   release,
   xtool,
 }:
@@ -28,7 +29,7 @@ runCommand "apple-sdk-${release.xcode.version}"
       lndir -silent "$component" "$out"
     done
 
-    ${lib.optionalString includesXtool ''
+    ${lib.optionalString (includesXtool && stdenvNoCC.hostPlatform.isDarwin) ''
       rm "$out/bin/xtool"
       cat > "$out/bin/xtool" <<'EOF'
       #!/bin/sh

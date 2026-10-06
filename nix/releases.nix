@@ -6,7 +6,30 @@
       developerDir = "/Applications/Xcode.app/Contents/Developer";
     };
 
-    swift.version = "6.3.3";
+    swift = {
+      version = "6.3.3";
+      distribution = {
+        name = "ubuntu";
+        version = "24.04";
+        codename = "noble";
+      };
+      sources = {
+        aarch64-linux = {
+          url = "https://download.swift.org/swift-6.3.3-release/ubuntu2404-aarch64/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-ubuntu24.04-aarch64.tar.gz";
+          hash = "sha256-RxJjlUKWU/p2jTcGVYduwbaPapXHiE9eTxeXABQcm38=";
+        };
+        x86_64-linux = {
+          url = "https://download.swift.org/swift-6.3.3-release/ubuntu2404/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-ubuntu24.04.tar.gz";
+          hash = "sha256-2oJypf3czWWxUp7Q5S4EUm4urdQjfVjWIg7+uXPGzRk=";
+        };
+      };
+    };
+
+    darwinSdk = {
+      epoch = 3;
+      darwinToolsVersion = "1.1.0";
+      openAppleMacrosVersion = "1.3.0";
+    };
 
     sdks = {
       driverkit = "25.5";

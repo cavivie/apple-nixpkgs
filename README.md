@@ -1,21 +1,20 @@
 # Apple Nixpkgs
 
-Reproducible Nix packages and version policy for Apple platform development
-with [xtool](https://github.com/xtool-org/xtool).
+Reproducible host tools and release policy for Apple platform development with
+[xtool](https://github.com/xtool-org/xtool).
 
-The package set pins xtool and declares a tested bill of materials for Xcode,
-Swift and the Apple platform SDKs. Apple-proprietary Xcode and SDK files remain
-in the Xcode installation obtained by each developer from Apple; this repository
-does not download, copy, publish or cache them.
+Apple Nixpkgs exposes one complete `toolchain` on every supported host. Host
+differences remain internal to the package set:
 
-## Supported hosts
+| Host | Nix-managed components | User-provided Apple component |
+| --- | --- | --- |
+| Apple Silicon macOS | xtool and environment policy | Xcode.app |
+| x86-64 Linux | xtool and matching Swift.org toolchain | Darwin SDK built from Xcode |
+| ARM64 Linux | xtool and matching Swift.org toolchain | Darwin SDK built from Xcode |
 
-- Apple SDK environment: Apple Silicon macOS (`aarch64-darwin`)
-- Standalone xtool package: Apple Silicon macOS, x86-64 Linux and ARM64 Linux
-
-Linux xtool packages are provided because xtool itself supports those hosts.
-The composed Apple SDK is intentionally restricted to Apple hardware running
-macOS, matching the execution boundary in Apple's Xcode and SDK agreement.
+The repository never downloads or redistributes Xcode or Apple SDK contents.
+It records the compatible Xcode, Swift, platform SDK and xtool versions, then
+validates the external Apple component before a build.
 
 ## Use as a Flake input
 
@@ -31,79 +30,103 @@ macOS, matching the execution boundary in Apple's Xcode and SDK agreement.
 
   outputs = { nixpkgs, apple-nixpkgs, ... }:
     let
-      system = "aarch64-darwin";
+      system = builtins.currentSystem;
       pkgs = import nixpkgs { inherit system; };
-      appleSdk = apple-nixpkgs.sdk.${system} (sdkPkgs: with sdkPkgs; [
-        xtool
-        xcode-platform
-      ]);
+      appleToolchain = apple-nixpkgs.packages.${system}.toolchain;
     in {
       devShells.${system}.default = pkgs.mkShellNoCC {
-        packages = [ appleSdk ];
+        packages = [ appleToolchain ];
       };
     };
 }
 ```
 
-The setup hook selects `/Applications/Xcode.app` by default. Select another
-installation without changing the package set:
+Consumers should depend on `toolchain`, not assemble `xtool` and a platform
+SDK independently. This keeps the compatibility contract atomic when xtool's
+SDK layout or Swift requirements change.
+
+## Platform setup
+
+### macOS
+
+The toolchain selects `/Applications/Xcode.app` by default. A different Xcode
+installation can be selected without modifying the package set:
 
 ```bash
 export APPLE_NIXPKGS_XCODE_PATH=/Applications/Xcode-beta.app
-nix develop
-apple-sdk-doctor
+nix run github:cavivie/apple-nixpkgs#doctor
 ```
 
-The hook exports `DEVELOPER_DIR` and adds the selected Xcode toolchain to
-`PATH`. It deliberately does not export `SDKROOT`; callers should select an SDK
-for an individual command through xtool or `xcrun --sdk`. The composed SDK also
-wraps xtool so the selected Xcode toolchain takes precedence for every build,
-independent of setup-hook ordering in a consumer's development shell.
+The setup hook exports `DEVELOPER_DIR` and places the selected Xcode toolchain
+on `PATH`. It deliberately does not export `SDKROOT`; xtool or an individual
+`xcrun --sdk` invocation must select the target SDK.
+
+### Linux
+
+Linux requires both the Swift host toolchain and a Darwin Swift SDK. The former
+is supplied by Nix and matches the Swift release embedded in the selected
+Xcode. The latter must be produced from an Xcode download obtained by the user
+from Apple Developer.
+
+Swift.org publishes host binaries against named Linux distributions rather
+than as a distribution-neutral archive. The release manifest therefore records
+Ubuntu 24.04 (`noble`) as the upstream binary baseline. The package patches its
+ELF loader and runtime library paths to Nix store dependencies; consumers do
+not need Ubuntu or an FHS installation.
+
+Install directly from `Xcode.xip`, `Xcode.app`, or a prebuilt
+`darwin.xtoolsdk`:
+
+```bash
+nix run github:cavivie/apple-nixpkgs#install-sdk -- ~/Downloads/Xcode.xip
+nix run github:cavivie/apple-nixpkgs#doctor
+```
+
+The installer delegates SDK construction and post-processing to the pinned
+xtool version. It installs the result at xtool's standard SwiftPM location:
+`$XDG_CONFIG_HOME/swiftpm/swift-sdks/darwin.artifactbundle`, or
+`~/.swiftpm/swift-sdks/darwin.artifactbundle` when `XDG_CONFIG_HOME` is unset.
+This is external developer state, analogous to the selected Xcode.app on
+macOS. Missing or incompatible state is an error; the toolchain never degrades
+to a standalone xtool environment.
+
+SDK construction is architecture-specific. A `.xtoolsdk` prepared for an
+x86-64 Linux host must not be reused on ARM64 Linux, or conversely.
 
 ## Package model
 
-- `xtool`: the signed upstream application on macOS and official AppImage on
-  Linux;
-- `xcode-platform`: environment setup and validation for an external Xcode;
-- `sdk`: the composed Apple development environment.
+- `packages.<system>.toolchain` is the supported consumer interface;
+- `packages.<system>.xtool` is a leaf package for SDK maintenance and
+  diagnostics;
+- `packages.<linux-system>.swift-toolchain` is the Swift.org host toolchain;
+- `sdk.<system>` is the lower-level component composer for specialized use.
 
-`nix run .#doctor` validates the selected installation against the release
-manifest, including Xcode version and build, Swift version, and every declared
-platform SDK. This separates reproducible policy from licensed payload:
-
-```text
-Nix store                          External developer state
--------------------------------    ----------------------------------
-xtool binary                       /Applications/Xcode.app
-version manifest                   Apple Account authentication
-environment and validation logic   certificates and private keys
-                                   provisioning profiles and devices
-```
+`nix run .#doctor` validates the complete release contract. On macOS it checks
+Xcode version and build, Swift, and all declared platform SDKs. On Linux it
+checks the Swift host compiler, xtool SDK layout epoch, required metadata, and
+the iPhoneOS, iPhoneSimulator, and macOS SDK versions.
 
 Authentication, signing identities, provisioning profiles, registered devices
-and xtool account state must not be placed in a derivation or committed to this
-repository.
+and xtool account state remain outside Nix derivations and source control.
 
 ## Release model
 
-`main` tracks the newest verified stable BOM. Consumers pin its exact revision
-with `flake.lock`. The manifest in [`nix/releases.nix`](nix/releases.nix) is the
-source of truth; README prose is not a version registry.
-
-Each release records:
+`main` tracks the newest verified stable bill of materials. Consumers pin its
+exact revision in `flake.lock`. [`nix/releases.nix`](nix/releases.nix) is the
+source of truth and records:
 
 - Xcode marketing version and build number;
-- Swift compiler version;
+- Swift version, upstream Linux distribution baseline, and official archives;
 - Apple platform SDK versions;
-- xtool version and official release hashes.
+- xtool version, sources, and Darwin SDK layout dependencies.
 
-Adding a release requires validating both `apple-sdk-doctor` and an actual
-xtool application build. A successful `xtool --version` check alone is not a
-sufficient compatibility test.
+Changing any member requires a complete compatibility validation. In
+particular, upgrading xtool can invalidate an installed Linux Darwin SDK even
+when the Xcode version is unchanged.
 
 ## Licensing boundary
 
 The MIT license covers only this repository's Nix expressions, scripts and
-documentation. xtool retains its upstream license. Xcode and Apple SDKs remain
-subject to Apple's agreements and are neither redistributed nor admitted to a
-public binary cache by this project.
+documentation. xtool and Swift retain their upstream licenses. Xcode and Apple
+SDKs remain subject to Apple's agreements and are neither redistributed nor
+admitted to a public binary cache by this project.
