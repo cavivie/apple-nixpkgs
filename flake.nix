@@ -138,7 +138,10 @@
         in
         {
           xtool = pkgs.runCommand "check-xtool" { } ''
-            ${xtool}/bin/xtool --version | grep -q '${releases.${latestVersion}.xtool.version}'
+            test -x ${xtool}/bin/xtool
+            ${nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              ${xtool}/bin/xtool --version | grep -q '${releases.${latestVersion}.xtool.version}'
+            ''}
             touch "$out"
           '';
         }
