@@ -183,6 +183,9 @@
             ''}
             ${nixpkgs.lib.optionalString (!packageSet.isDarwin) ''
               test -x ${packageSet.toolchain}/bin/swift
+              ${packageSet.toolchain}/bin/swift --version \
+                | grep -q '${releases.${latestVersion}.swift.version}'
+              ${packageSet.toolchain}/bin/clang --version >/dev/null
               test -f ${packageSet.toolchain}/nix-support/setup-hook
             ''}
             touch "$out"
