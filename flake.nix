@@ -42,15 +42,24 @@
             swift-toolchain = swiftToolchain;
           };
           mkSdk = pkgs.callPackage ./nix/mk-sdk.nix { inherit release xtool; };
-          sdk = componentsFn: mkSdk (componentsFn sdkPackages);
-          toolchain = sdk (
-            components:
-            [
-              components.xtool
-              components.apple-platform
-            ]
-            ++ nixpkgs.lib.optional (!isDarwin) components.swift-toolchain
-          );
+          sdk =
+            componentsFn:
+            let
+              selectedComponents = componentsFn sdkPackages;
+              resolvedComponents =
+                selectedComponents
+                ++ nixpkgs.lib.optional (
+                  !isDarwin && builtins.elem applePlatform selectedComponents
+                ) swiftToolchain;
+            in
+            mkSdk resolvedComponents;
+          fullSdk = sdk (components: [
+            components.xtool
+            components.apple-platform
+          ]);
+          # Compatibility alias for consumers of releases before the SDK
+          # component interface became the primary public API.
+          toolchain = fullSdk;
           versionSlug = builtins.replaceStrings [ "." ] [ "-" ] release.xcode.version;
         in
         {
@@ -62,6 +71,7 @@
             sdkPackages
             sdk
             swiftToolchain
+            fullSdk
             toolchain
             versionSlug
             xtool
@@ -84,7 +94,7 @@
           appleXtool = (packageSetFor final.system).xtool;
           appleSdkPackages = (packageSetFor final.system).sdkPackages;
           appleSdk = (packageSetFor final.system).sdk;
-          appleToolchain = (packageSetFor final.system).toolchain;
+          appleToolchain = (packageSetFor final.system).fullSdk;
         };
 
       packages = forSupportedSystems (
@@ -94,9 +104,9 @@
         in
         {
           inherit (packageSet) xtool toolchain;
-          sdk = packageSet.toolchain;
-          "sdk-${packageSet.versionSlug}" = packageSet.toolchain;
-          default = packageSet.toolchain;
+          sdk = packageSet.fullSdk;
+          "sdk-${packageSet.versionSlug}" = packageSet.fullSdk;
+          default = packageSet.fullSdk;
         }
         // nixpkgs.lib.optionalAttrs packageSet.isDarwin {
           xcode-platform = packageSet.applePlatform;

@@ -3,7 +3,7 @@
 Reproducible host tools and release policy for Apple platform development with
 [xtool](https://github.com/xtool-org/xtool).
 
-Apple Nixpkgs exposes one complete `toolchain` on every supported host. Host
+Apple Nixpkgs exposes one composable SDK interface on every supported host. Host
 differences remain internal to the package set:
 
 | Host | Nix-managed components | User-provided Apple component |
@@ -32,24 +32,31 @@ validates the external Apple component before a build.
     let
       system = builtins.currentSystem;
       pkgs = import nixpkgs { inherit system; };
-      appleToolchain = apple-nixpkgs.packages.${system}.toolchain;
+      appleSdk = apple-nixpkgs.sdk.${system} (
+        sdkPkgs: with sdkPkgs; [
+          xtool
+          apple-platform
+        ]
+      );
     in {
       devShells.${system}.default = pkgs.mkShellNoCC {
-        packages = [ appleToolchain ];
+        packages = [ appleSdk ];
       };
     };
 }
 ```
 
-Consumers should depend on `toolchain`, not assemble `xtool` and a platform
-SDK independently. This keeps the compatibility contract atomic when xtool's
-SDK layout or Swift requirements change.
+Consumers select logical components through `sdk.<system>`. Selecting
+`apple-platform` automatically adds the matching Swift.org host toolchain on
+Linux, so the same component list works on every supported host. This keeps
+host-specific dependencies and the compatibility contract inside Apple
+Nixpkgs.
 
 ## Platform setup
 
 ### macOS
 
-The toolchain selects `/Applications/Xcode.app` by default. A different Xcode
+The SDK environment selects `/Applications/Xcode.app` by default. A different Xcode
 installation can be selected without modifying the package set:
 
 ```bash
@@ -87,7 +94,7 @@ xtool version. It installs the result at xtool's standard SwiftPM location:
 `$XDG_CONFIG_HOME/swiftpm/swift-sdks/darwin.artifactbundle`, or
 `~/.swiftpm/swift-sdks/darwin.artifactbundle` when `XDG_CONFIG_HOME` is unset.
 This is external developer state, analogous to the selected Xcode.app on
-macOS. Missing or incompatible state is an error; the toolchain never degrades
+macOS. Missing or incompatible state is an error; the SDK environment never degrades
 to a standalone xtool environment.
 
 SDK construction is architecture-specific. A `.xtoolsdk` prepared for an
@@ -95,11 +102,12 @@ x86-64 Linux host must not be reused on ARM64 Linux, or conversely.
 
 ## Package model
 
-- `packages.<system>.toolchain` is the supported consumer interface;
+- `sdk.<system>` is the primary component interface;
+- `packages.<system>.sdk` is the complete SDK preset;
+- `packages.<system>.toolchain` is a compatibility alias for the complete SDK;
 - `packages.<system>.xtool` is a leaf package for SDK maintenance and
   diagnostics;
 - `packages.<linux-system>.swift-toolchain` is the Swift.org host toolchain;
-- `sdk.<system>` is the lower-level component composer for specialized use.
 
 `nix run .#doctor` validates the complete release contract. On macOS it checks
 Xcode version and build, Swift, and all declared platform SDKs. On Linux it
