@@ -31,7 +31,7 @@
             inherit xtool;
             xcode-platform = xcodePlatform;
           };
-          mkSdk = pkgs.callPackage ./nix/mk-sdk.nix { inherit release; };
+          mkSdk = pkgs.callPackage ./nix/mk-sdk.nix { inherit release xtool; };
           sdk = componentsFn: mkSdk (componentsFn sdkPackages);
           fullSdk = sdk (components: builtins.attrValues components);
           versionSlug = builtins.replaceStrings [ "." ] [ "-" ] release.xcode.version;

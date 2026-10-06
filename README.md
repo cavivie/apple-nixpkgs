@@ -56,7 +56,9 @@ apple-sdk-doctor
 
 The hook exports `DEVELOPER_DIR` and adds the selected Xcode toolchain to
 `PATH`. It deliberately does not export `SDKROOT`; callers should select an SDK
-for an individual command through xtool or `xcrun --sdk`.
+for an individual command through xtool or `xcrun --sdk`. The composed SDK also
+wraps xtool so the selected Xcode toolchain takes precedence for every build,
+independent of setup-hook ordering in a consumer's development shell.
 
 ## Package model
 
